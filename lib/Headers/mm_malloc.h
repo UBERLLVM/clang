@@ -26,7 +26,7 @@
 
 #include <stdlib.h>
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__ANDROID__)
 #include <malloc.h>
 #else
 #ifndef __cplusplus
@@ -57,6 +57,8 @@ _mm_malloc(size_t __size, size_t __align)
   __mallocedMemory = __mingw_aligned_malloc(__size, __align);
 #elif defined(_WIN32)
   __mallocedMemory = _aligned_malloc(__size, __align);
+#elif defined(__ANDROID__)
+  __mallocedMemory = memalign(__align, __size);
 #else
   if (posix_memalign(&__mallocedMemory, __align, __size))
     return 0;

@@ -6134,6 +6134,127 @@ void AMDGPUTargetCodeGenInfo::SetTargetAttributes(
 
 
 //===----------------------------------------------------------------------===//
+// Android ABI Implementation
+//===----------------------------------------------------------------------===//
+namespace {
+
+class AndroidABIInfo : public ABIInfo {
+  bool m32bits;
+
+public:
+  AndroidABIInfo(CodeGenTypes &CGT, bool is32bits) : ABIInfo(CGT), m32bits(is32bits) {}
+
+private:
+  ABIArgInfo classifyReturnType(QualType RetTy) const;
+  ABIArgInfo classifyArgumentType(QualType RetTy) const;
+
+  virtual void computeInfo(CGFunctionInfo &FI) const;
+
+  virtual llvm::Value *EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
+                                 CodeGenFunction &CGF) const;
+};
+
+class AndroidTargetCodeGenInfo : public TargetCodeGenInfo {
+public:
+  AndroidTargetCodeGenInfo(CodeGenTypes &CGT, bool is32bits)
+    : TargetCodeGenInfo(new AndroidABIInfo(CGT, is32bits)) {}
+};
+
+}  // end anonymous namespace
+
+ABIArgInfo AndroidABIInfo::classifyArgumentType(QualType Ty) const {
+  if (!isAggregateTypeForABI(Ty)) {
+    // Treat an enum type as its underlying type.
+    if (const EnumType *EnumTy = Ty->getAs<EnumType>())
+      Ty = EnumTy->getDecl()->getIntegerType();
+
+    return (Ty->isPromotableIntegerType() ?
+            ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
+  }
+
+  // Ignore empty records.
+  if (isEmptyRecord(getContext(), Ty, true))
+    return ABIArgInfo::getIgnore();
+
+  // Structures with either a non-trivial destructor or a non-trivial
+  // copy constructor are always indirect.
+  if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, getCXXABI()))
+    return ABIArgInfo::getIndirect(0, RAA == CGCXXABI::RAA_DirectInMemory);
+
+  // Otherwise, pass by coercing to a structure of the appropriate size.
+  llvm::Type* ElemTy;
+  unsigned SizeRegs;
+  if (getContext().getTypeAlign(Ty) > 32) {
+    ElemTy = llvm::Type::getInt64Ty(getVMContext());
+    SizeRegs = (getContext().getTypeSize(Ty) + 63) / 64;
+  } else {
+    ElemTy = llvm::Type::getInt32Ty(getVMContext());
+    SizeRegs = (getContext().getTypeSize(Ty) + 31) / 32;
+  }
+
+  llvm::Type *STy =
+    llvm::StructType::get(llvm::ArrayType::get(ElemTy, SizeRegs), NULL);
+  return ABIArgInfo::getDirect(STy);
+}
+
+ABIArgInfo AndroidABIInfo::classifyReturnType(QualType RetTy) const {
+  if (RetTy->isVoidType())
+    return ABIArgInfo::getIgnore();
+
+  if (isEmptyRecord(getContext(), RetTy, true))
+    return ABIArgInfo::getIgnore();
+
+  if (isAggregateTypeForABI(RetTy)) {
+    if (m32bits) {
+      return ABIArgInfo::getIndirect(0);
+    } else {
+      uint64_t Size = getContext().getTypeSize(RetTy);
+      if (Size <= 128) {
+        Size = 64 * ((Size + 63) / 64); // round up to multiple of 8 bytes
+        return ABIArgInfo::getDirect(llvm::IntegerType::get(getVMContext(), Size));
+      }
+      return ABIArgInfo::getIndirect(0);
+    }
+  }
+
+  // Treat an enum type as its underlying type.
+  if (const EnumType *EnumTy = RetTy->getAs<EnumType>())
+    RetTy = EnumTy->getDecl()->getIntegerType();
+
+  return (RetTy->isPromotableIntegerType() ?
+          ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
+}
+
+void AndroidABIInfo::computeInfo(CGFunctionInfo &FI) const {
+  bool CXXDecide = false;
+  if (!m32bits) {
+    CXXDecide = getCXXABI().classifyReturnType(FI);
+  }
+  if (!CXXDecide)
+    FI.getReturnInfo() = classifyReturnType(FI.getReturnType());
+  for (CGFunctionInfo::arg_iterator it = FI.arg_begin(), ie = FI.arg_end();
+       it != ie; ++it)
+    it->info = classifyArgumentType(it->type);
+}
+
+llvm::Value *AndroidABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
+                                       CodeGenFunction &CGF) const {
+  if (getTarget().getTriple().getArch() == llvm::Triple::le64) {
+    return NULL;  // Let it generate llvm::VAArgInst
+  } else {
+    CGBuilderTy &Builder = CGF.Builder;
+    llvm::Type *PTy =
+      llvm::PointerType::getUnqual(CGF.ConvertType(Ty));
+
+    // Since ABIInfo::EmitVAArg should return a pointer of Ty,
+    // We emit va_arg i8** va_list, Ty* for Ty
+    llvm::Value *v = Builder.CreateVAArg(VAListAddr, PTy);
+    return v;
+  }
+}
+
+
+//===----------------------------------------------------------------------===//
 // SPARC v9 ABI Implementation.
 // Based on the SPARC Compliance Definition version 2.4.1.
 //
@@ -7079,7 +7200,13 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
     return *(TheTargetCodeGenInfo = new DefaultTargetCodeGenInfo(Types));
 
   case llvm::Triple::le32:
-    return *(TheTargetCodeGenInfo = new PNaClTargetCodeGenInfo(Types));
+    if (Triple.getOS() == llvm::Triple::NDK)
+      return *(TheTargetCodeGenInfo = new AndroidTargetCodeGenInfo(Types, true));
+    else
+      return *(TheTargetCodeGenInfo = new PNaClTargetCodeGenInfo(Types));
+  case llvm::Triple::le64:
+    if (Triple.getOS() == llvm::Triple::NDK)
+      return *(TheTargetCodeGenInfo = new AndroidTargetCodeGenInfo(Types, false));
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
     return *(TheTargetCodeGenInfo = new MIPSTargetCodeGenInfo(Types, true));

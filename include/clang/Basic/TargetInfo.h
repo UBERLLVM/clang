@@ -141,6 +141,10 @@ public:
     /// http://infocenter.arm.com/help/topic/com.arm.doc.ihi0055a/IHI0055A_aapcs64.pdf
     AArch64ABIBuiltinVaList,
 
+    /// We follow AArch64 for largest size, but use array [1] since it is
+    /// convenient for parameter passing during optimization passes
+    NDK64ABIBuiltinVaList,
+
     /// __builtin_va_list as defined by the PNaCl ABI:
     /// http://www.chromium.org/nativeclient/pnacl/bitcode-abi#TOC-Machine-Types
     PNaClABIBuiltinVaList,

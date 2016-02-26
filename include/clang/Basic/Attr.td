@@ -390,6 +390,14 @@ def AlwaysInline : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def AllocSize : InheritableAttr {
+  let Args = [VariadicUnsignedArgument<"Size">];
+  let Ignored = 1;
+  let Spellings = [GCC<"alloc_size">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+}
+
 def TLSModel : InheritableAttr {
   let Spellings = [GCC<"tls_model">];
   let Subjects = SubjectList<[TLSVar], ErrorDiag, "ExpectedTLSVar">;

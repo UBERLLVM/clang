@@ -2229,6 +2229,10 @@ void NeonEmitter::run(raw_ostream &OS) {
   OS << "#ifndef __ARM_NEON_H\n";
   OS << "#define __ARM_NEON_H\n\n";
 
+  OS << "#if defined(__i386__) || defined(__x86_64__)\n";
+  OS << "#include \"arm_neon_x86.h\"\n";
+  OS << "#else\n";
+
   OS << "#if !defined(__ARM_NEON)\n";
   OS << "#error \"NEON support not enabled\"\n";
   OS << "#endif\n\n";
@@ -2380,6 +2384,7 @@ void NeonEmitter::run(raw_ostream &OS) {
 
   OS << "\n";
   OS << "#undef __ai\n\n";
+  OS << "#endif // __i386__ || __x86_64__\n\n";
   OS << "#endif /* __ARM_NEON_H */\n";
 }
 

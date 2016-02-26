@@ -666,6 +666,68 @@ public:
         Target::checkCallingConvention(CC);
   }
 };
+
+template <typename Target>
+class AndroidTargetInfo : public OSTargetInfo<Target> {
+ protected:
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                            MacroBuilder &Builder) const {
+    Builder.defineMacro("__le32__");
+  }
+ public:
+  AndroidTargetInfo(const llvm::Triple &triple)
+    : OSTargetInfo<Target>(triple) {
+    this->DoubleAlign = 64;
+    this->LongLongAlign = 64;
+    this->LongDoubleAlign = 64;
+    this->SuitableAlign = 64;
+
+    this->SizeType = TargetInfo::UnsignedInt;
+    this->PtrDiffType = TargetInfo::SignedInt;
+    this->IntPtrType = TargetInfo::SignedInt;
+
+    this->RegParmMax = 3;
+    this->UseZeroLengthBitfieldAlignment = true;
+
+    this->TheCXXABI.set(TargetCXXABI::GenericARM);
+
+    this->DescriptionString = "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
+                              "i64:32:64-f32:32:32-f64:32:64-v64:64:64-"
+                              "v128:64:128-a0:0:64-n32-S64";
+  }
+};
+
+template <typename Target>
+class Android64TargetInfo : public OSTargetInfo<Target> {
+ protected:
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                            MacroBuilder &Builder) const {
+    Builder.defineMacro("__le64__");
+  }
+ public:
+  Android64TargetInfo(const llvm::Triple &triple)
+    : OSTargetInfo<Target>(triple) {
+    this->LongWidth = this->LongAlign = 64;
+    this->PointerWidth = this->PointerAlign = 64;
+    this->DoubleWidth = this->DoubleAlign = 64;
+    this->LongLongWidth = this->LongLongAlign = 64;
+    this->LongDoubleWidth = this->LongDoubleAlign = 128;
+    this->LongDoubleFormat = &llvm::APFloat::IEEEquad;
+
+    this->WCharType = this->UnsignedInt;
+    this->SizeType = TargetInfo::UnsignedLong;
+    this->PtrDiffType = TargetInfo::SignedLong;
+    this->IntPtrType = TargetInfo::SignedLong;
+
+    this->TheCXXABI.set(TargetCXXABI::GenericAArch64);
+    this->SuitableAlign = 128;
+
+    this->DescriptionString = "e-p:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
+                              "i64:64:64-f32:32:32-f64:64:64-"
+                              "f128:128:128-n32:64-S128";
+  }
+};
+
 } // end anonymous namespace.
 
 //===----------------------------------------------------------------------===//
@@ -3244,9 +3306,14 @@ class X86_32TargetInfo : public X86TargetInfo {
 public:
   X86_32TargetInfo(const llvm::Triple &Triple) : X86TargetInfo(Triple) {
     DoubleAlign = LongLongAlign = 32;
-    LongDoubleWidth = 96;
     LongDoubleAlign = 32;
     SuitableAlign = 128;
+    if (Triple.getEnvironment() == llvm::Triple::Android) {
+      LongDoubleWidth = 64;
+      LongDoubleFormat = &llvm::APFloat::IEEEdouble;
+    } else {
+      LongDoubleWidth = 96;
+    }
     DescriptionString = "e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128";
     SizeType = UnsignedInt;
     PtrDiffType = SignedInt;
@@ -6309,6 +6376,88 @@ const Builtin::Info Le64TargetInfo::BuiltinInfo[] = {
 };
 
 namespace {
+class AndroidNDKTargetInfo : public TargetInfo {
+public:
+  AndroidNDKTargetInfo(const llvm::Triple& Triple);
+
+  virtual void getArchDefines(const LangOptions &Opts,
+                              MacroBuilder &Builder) const;
+
+  virtual void getTargetDefines(const LangOptions& Opts,
+                                MacroBuilder& Builder) const;
+
+  virtual BuiltinVaListKind getBuiltinVaListKind() const {
+    if (getTriple().getArch() == llvm::Triple::le32) {
+      return TargetInfo::CharPtrBuiltinVaList;
+    } else {
+      return TargetInfo::NDK64ABIBuiltinVaList;
+    }
+  }
+
+  virtual void getTargetBuiltins(const Builtin::Info*& Records,
+                                 unsigned& NumRecords) const {
+  }
+
+  virtual const char* getClobbers() const {
+    return "";
+  }
+
+  virtual void getGCCRegNames(const char* const*& Names,
+                              unsigned& NumNames) const {
+    Names = NULL;
+    NumNames = 0;
+  }
+
+  virtual void getGCCRegAliases(const TargetInfo::GCCRegAlias*& Aliases,
+                                unsigned& NumAliases) const {
+    Aliases = NULL;
+    NumAliases = 0;
+  }
+
+  virtual bool validateAsmConstraint(const char*& Name,
+                                     TargetInfo::ConstraintInfo& Info) const {
+    return false;
+  }
+
+  virtual const char *getStaticInitSectionSpecifier() const {
+    return ".text.startup";
+  }
+};
+
+AndroidNDKTargetInfo::AndroidNDKTargetInfo(const llvm::Triple& Triple)
+    : TargetInfo(Triple) {
+  UserLabelPrefix = "";
+
+  BigEndian = false;
+  NoAsmVariants = true;
+
+  MaxAtomicPromoteWidth = 64;
+  MaxAtomicInlineWidth = 64;
+  RegParmMax = 3;
+  UseZeroLengthBitfieldAlignment = true;
+}
+
+void AndroidNDKTargetInfo::getArchDefines(const LangOptions& Opts,
+                                         MacroBuilder& Builder) const {
+  Builder.defineMacro("__ANDROID__");
+}
+
+void AndroidNDKTargetInfo::getTargetDefines(const LangOptions& Opts,
+                                         MacroBuilder& Builder) const {
+  DefineStd(Builder, "unix", Opts);
+  DefineStd(Builder, "linux", Opts);
+  Builder.defineMacro("__gnu_linux__");
+  Builder.defineMacro("__ELF__");
+  Builder.defineMacro("__LITTLE_ENDIAN__");
+  if (Opts.POSIXThreads)
+    Builder.defineMacro("_REENTRANT");
+  if (Opts.CPlusPlus)
+    Builder.defineMacro("_GNU_SOURCE");
+  getArchDefines(Opts, Builder);
+}
+} // end anonymous namespace
+
+namespace {
   static const unsigned SPIRAddrSpaceMap[] = {
     1,    // opencl_global
     3,    // opencl_local
@@ -6631,12 +6780,19 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
     switch (os) {
       case llvm::Triple::NaCl:
         return new NaClTargetInfo<PNaClTargetInfo>(Triple);
+      case llvm::Triple::NDK:
+        return new AndroidTargetInfo<AndroidNDKTargetInfo>(Triple);
       default:
         return nullptr;
     }
 
   case llvm::Triple::le64:
-    return new Le64TargetInfo(Triple);
+    switch (os) {
+      case llvm::Triple::NDK:
+        return new Android64TargetInfo<AndroidNDKTargetInfo>(Triple);
+      default:
+        return new Le64TargetInfo(Triple);
+    }
 
   case llvm::Triple::ppc:
     if (Triple.isOSDarwin())

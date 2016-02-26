@@ -375,7 +375,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
     // Until dtrace (via CTF) and LLDB can deal with distributed debug info,
     // Darwin and FreeBSD default to standalone/full debug info.
     if (llvm::Triple(TargetOpts.Triple).isOSDarwin() ||
-        llvm::Triple(TargetOpts.Triple).isOSFreeBSD())
+        llvm::Triple(TargetOpts.Triple).isOSFreeBSD() ||
+        llvm::Triple(TargetOpts.Triple).isOSAndroid())
       Default = true;
 
     if (Args.hasFlag(OPT_fstandalone_debug, OPT_fno_standalone_debug, Default))
@@ -1326,9 +1327,13 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
       case IK_ObjCXX:
       case IK_PreprocessedCXX:
       case IK_PreprocessedObjCXX:
-        if (!Std.isCPlusPlus())
-          Diags.Report(diag::err_drv_argument_not_allowed_with)
-            << A->getAsString(Args) << "C++/ObjC++";
+        if (!Std.isCPlusPlus()) {
+          if (Args.hasArg(options::OPT_Qignore_c_std_not_allowed_with_cplusplus))
+            LangStd = LangStandard::lang_unspecified; //FIXME: should find 2nd-to-the-last
+          else
+            Diags.Report(diag::err_drv_argument_not_allowed_with)
+              << A->getAsString(Args) << "C++/ObjC++";
+        }
         break;
       case IK_OpenCL:
         if (!Std.isC99())
@@ -1489,6 +1494,10 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.CXXExceptions = Args.hasArg(OPT_fcxx_exceptions);
   Opts.SjLjExceptions = Args.hasArg(OPT_fsjlj_exceptions);
   Opts.TraditionalCPP = Args.hasArg(OPT_traditional_cpp);
+  Opts.CXXMissingReturnSemantics =
+    Args.hasFlag(OPT_fcxx_missing_return_semantics,
+                 OPT_fno_cxx_missing_return_semantics,
+                 Opts.CXXMissingReturnSemantics);
 
   Opts.RTTI = !Args.hasArg(OPT_fno_rtti);
   Opts.RTTIData = Opts.RTTI && !Args.hasArg(OPT_fno_rtti_data);

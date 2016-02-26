@@ -51,6 +51,52 @@ MachO::MachO(const Driver &D, const llvm::Triple &Triple,
     getProgramPaths().push_back(getDriver().Dir);
 }
 
+/// NDKClang - Toolchain to generate bitcode
+
+NDKClang::NDKClang(const Driver &D,
+                   const llvm::Triple& Triple,
+                   const ArgList &Args)
+  : ToolChain(D, Triple, Args) {
+  getProgramPaths().push_back(getDriver().getInstalledDir());
+  if (getDriver().getInstalledDir() != getDriver().Dir)
+    getProgramPaths().push_back(getDriver().Dir);
+}
+
+NDKClang::~NDKClang() {
+}
+
+bool NDKClang::IsUnwindTablesDefault() const {
+  return true;
+}
+
+bool NDKClang::UseSjLjExceptions() const {
+  return false;
+}
+
+bool NDKClang::HasNativeLLVMSupport() const {
+  return true;
+}
+
+bool NDKClang::isPICDefault() const {
+  return true;
+}
+
+bool NDKClang::isPIEDefault() const {
+  return false;
+}
+
+bool NDKClang::isPICDefaultForced() const {
+  return false;
+}
+
+Tool *NDKClang::buildLinker() const {
+  return new tools::ndktools::Link(*this);
+}
+
+Tool *NDKClang::buildAssembler() const {
+  return new tools::ClangAs(*this);
+}
+
 /// Darwin - Darwin tool chain for i386 and x86_64.
 Darwin::Darwin(const Driver & D, const llvm::Triple & Triple,
                const ArgList & Args)
@@ -1516,6 +1562,36 @@ static void addMultilibFlag(bool Enabled, const char *const Flag,
     Flags.push_back(std::string("-") + Flag);
 }
 
+static bool isARMArch(llvm::Triple::ArchType Arch) {
+  return Arch == llvm::Triple::arm || Arch == llvm::Triple::thumb;
+}
+
+static bool isARMv7a(const ArgList &Args) {
+  if (const Arg *A = Args.getLastArg(options::OPT_march_EQ))
+    return (A->getValue() == StringRef("armv7-a"));
+  return false;
+}
+
+static bool isARMHardFloat(const ArgList &Args) {
+  if (const Arg *A = Args.getLastArg(options::OPT_msoft_float,
+                                     options::OPT_mhard_float,
+                                     options::OPT_mfloat_abi_EQ)) {
+    if (A->getOption().matches(options::OPT_mhard_float)) {
+      return true;
+    } else if (A->getOption().matches(options::OPT_mfloat_abi_EQ) &&
+               A->getValue() == StringRef("hard")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool isThumb(const ArgList &Args) {
+  const Arg *A = Args.getLastArg(options::OPT_mthumb,
+                                 options::OPT_mno_thumb);
+  return A && A->getOption().matches(options::OPT_mthumb);
+}
+
 static bool isMipsArch(llvm::Triple::ArchType Arch) {
   return Arch == llvm::Triple::mips || Arch == llvm::Triple::mipsel ||
          Arch == llvm::Triple::mips64 || Arch == llvm::Triple::mips64el;
@@ -1559,6 +1635,75 @@ struct DetectedMultilibs {
 
 static Multilib makeMultilib(StringRef commonSuffix) {
   return Multilib(commonSuffix, commonSuffix, commonSuffix);
+}
+
+static bool findBiarchMultilibs(const llvm::Triple &TargetTriple,
+                                StringRef Path, const ArgList &Args,
+                                bool NeedsBiarchSuffix,
+                                DetectedMultilibs &Result);
+
+static bool findARMMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
+                             const llvm::opt::ArgList &Args,
+                             bool NeedsBiarchSuffix,
+                             DetectedMultilibs &Result) {
+  if (TargetTriple.getEnvironment() != llvm::Triple::Android)
+    return findBiarchMultilibs(TargetTriple, Path, Args, NeedsBiarchSuffix,
+                               Result);
+
+  FilterNonExistent NonExistent(Path);
+  MultilibSet AndroidARMMultilibs;
+  {
+    Multilib V7HardFPThumb = Multilib("/armv7-a/thumb/hard")
+      .flag("+march=armv7-a")
+      .flag("+mhard-float")
+      .flag("+mthumb");
+
+    Multilib V7HardFP = Multilib("/armv7-a/hard")
+      .flag("+march=armv7-a")
+      .flag("+mhard-float")
+      .flag("-mthumb");
+
+    Multilib V7Thumb = Multilib("/armv7-a/thumb")
+      .flag("+march=armv7-a")
+      .flag("-mhard-float")
+      .flag("+mthumb");
+
+    Multilib V7 = Multilib("/armv7-a")
+      .flag("+march=armv7-a")
+      .flag("-mhard-float")
+      .flag("-mthumb");
+
+    Multilib Thumb = Multilib("/thumb")
+      .flag("-march=armv7-a")
+      .flag("+mthumb");
+
+    Multilib Default = Multilib("")
+      .flag("-march=armv7-a")
+      .flag("-mthumb");
+
+    std::vector<Multilib> Eithers;
+    Eithers.push_back(V7HardFPThumb);
+    Eithers.push_back(V7HardFP);
+    Eithers.push_back(V7Thumb);
+    Eithers.push_back(V7);
+    Eithers.push_back(Thumb);
+    Eithers.push_back(Default);
+
+    AndroidARMMultilibs = MultilibSet()
+      .Either(Eithers)
+      .FilterOut(NonExistent);
+  }
+
+  Multilib::flags_list Flags;
+  addMultilibFlag(isARMv7a(Args), "march=armv7-a", Flags);
+  addMultilibFlag(isARMHardFloat(Args), "mhard-float", Flags);
+  addMultilibFlag(isThumb(Args), "mthumb", Flags);
+
+  if (AndroidARMMultilibs.select(Flags, Result.SelectedMultilib)) {
+    Result.Multilibs = AndroidARMMultilibs;
+    return true;
+  }
+  return false;
 }
 
 static bool findMIPSMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
@@ -1984,6 +2129,10 @@ void Generic_GCC::GCCInstallationDetector::ScanLibDirForGCCTriple(
       // so handle them there
       if (isMipsArch(TargetArch)) {
         if (!findMIPSMultilibs(TargetTriple, LI->path(), Args, Detected))
+          continue;
+      } else if (isARMArch(TargetArch)) {
+        if (!findARMMultilibs(TargetTriple, LI->path(), Args,
+                              NeedsBiarchSuffix, Detected))
           continue;
       } else if (!findBiarchMultilibs(TargetTriple, LI->path(), Args,
                                       NeedsBiarchSuffix, Detected)) {
@@ -2946,7 +3095,10 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   const bool IsAndroid = Triple.getEnvironment() == llvm::Triple::Android;
   const bool IsMips = isMipsArch(Arch);
 
-  if (IsMips && !SysRoot.empty())
+  // For Android, no need to add sysroot again for mips here because sysroot
+  // is either explicitly specified or implicitly auto-detected earlier in
+  // Driver::BuildCompilation.  Multiple sysroot may also fail ld.mcld.
+  if (IsMips && !SysRoot.empty() && !IsAndroid)
     ExtraOpts.push_back("--sysroot=" + SysRoot);
 
   // Do not use 'gnu' hash style for Mips targets because .gnu.hash
@@ -2997,6 +3149,14 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
     addPathIfExists((GCCInstallation.getInstallPath() +
                      Multilib.gccSuffix()),
                     Paths);
+
+    if (IsAndroid) {
+      // Add libstdc++ path
+      const std::string LibstdcppPath = getDriver().Dir + "/../" +
+                                        GCCTriple.str() + "/lib" +
+                                        Multilib.gccSuffix();
+      addPathIfExists(LibstdcppPath, Paths);
+    }
 
     // GCC cross compiling toolchains will install target libraries which ship
     // as part of the toolchain under <prefix>/<triple>/<libdir> rather than as
@@ -3105,7 +3265,13 @@ std::string Linux::computeSysRoot() const {
   if (!getDriver().SysRoot.empty())
     return getDriver().SysRoot;
 
-  if (!GCCInstallation.isValid() || !isMipsArch(getTriple().getArch()))
+  // For Android, the sysroot will be either explicitly specified or implicitly
+  // auto-detected in Driver::BuildCompilation.  Thus, we don't have to detect
+  // sysroot in this function.
+  bool IsAndroid = getTriple().getEnvironment() == llvm::Triple::Android;
+
+  if ((!GCCInstallation.isValid()) ||
+      (!isMipsArch(getTriple().getArch()) && !IsAndroid))
     return std::string();
 
   // Standalone MIPS toolchains use different names for sysroot folder

@@ -306,6 +306,25 @@ public:
   /// }
 };
 
+class LLVM_LIBRARY_VISIBILITY NDKClang : public ToolChain {
+
+public:
+  NDKClang(const Driver &D, const llvm::Triple& Triple, const llvm::opt::ArgList &Args);
+  ~NDKClang();
+
+  virtual bool IsUnwindTablesDefault() const;
+  virtual bool UseSjLjExceptions() const;
+  virtual bool HasNativeLLVMSupport() const;
+  virtual bool isPICDefault() const;
+  virtual bool isPIEDefault() const;
+  virtual bool isPICDefaultForced() const;
+  virtual bool IsIntegratedAssemblerDefault() const { return true; }
+
+protected:
+  virtual Tool *buildAssembler() const;
+  virtual Tool *buildLinker() const;
+};
+
   /// Darwin - The base Darwin tool chain.
 class LLVM_LIBRARY_VISIBILITY Darwin : public MachO {
 public:

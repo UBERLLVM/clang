@@ -934,9 +934,21 @@ static void InitCatchParam(CodeGenFunction &CGF,
 
         // Exn points to the struct _Unwind_Exception header, which
         // we have to skip past in order to reach the exception data.
-        unsigned HeaderSize =
-          CGF.CGM.getTargetCodeGenInfo().getSizeOfUnwindException();
-        AdjustedExn = CGF.Builder.CreateConstGEP1_32(Exn, HeaderSize);
+        if ((CGF.Target.getTriple().getArch() == llvm::Triple::le32 ||
+             CGF.Target.getTriple().getArch() == llvm::Triple::le64) &&
+            CGF.Target.getTriple().getOS() == llvm::Triple::NDK) {
+          // le32-none-ndk uses intrinsic to solve different unwind header size
+          llvm::FunctionType *FTy =
+            llvm::FunctionType::get(CGF.SizeTy, /*IsVarArgs=*/false);
+          llvm::Constant *Fn =
+            CGF.CGM.CreateRuntimeFunction(FTy, "__ndk_unknown_getUnwindHeaderSize");
+          llvm::CallInst *Ptr = CGF.Builder.CreateCall(Fn);
+          AdjustedExn = CGF.Builder.CreateInBoundsGEP(Exn, Ptr);
+        } else {
+          unsigned HeaderSize =
+            CGF.CGM.getTargetCodeGenInfo().getSizeOfUnwindException();
+          AdjustedExn = CGF.Builder.CreateConstGEP1_32(Exn, HeaderSize);
+        }
 
       // However, if we're catching a pointer-to-record type that won't
       // work, because the personality function might have adjusted
